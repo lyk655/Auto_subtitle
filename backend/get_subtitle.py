@@ -1,12 +1,16 @@
 import torch
 from pathlib import Path
+from nicegui import app, ui
 import time
 import torchaudio
 from moviepy import VideoFileClip
 import torchaudio.transforms as T
 import numpy as np
+import ast
 import soundfile as sf
 import whisper
+from openai import OpenAI
+client = OpenAI(api_key="sk-aac4578b297c4049bce06f65bced7331", base_url="https://api.deepseek.com")
 # demucs can be slow to import, so it's fine here
 from demucs.pretrained import get_model
 from demucs.apply import apply_model
@@ -84,15 +88,28 @@ def get_subtitle(video_path: str, progress_notification: ui.notification) -> Pat
         # Use a smaller model for faster processing if needed, e.g., "base" or "small"
         whisper_model = whisper.load_model("medium", device=device)
         print("Transcribing vocals...")
-        result = whisper_model.transcribe(str(vocals_path), language="zh", fp16=torch.cuda.is_available())
-
-        # 4. Create SRT file
-        progress_notification.message = '步骤 4/4: 正在生成SRT文件...'
+        result = whisper_model.transcribe(str(vocals_path), language="zh", fp16=torch.cuda.is_available())["segments"]
+        result1 = [{'start': segment['start'], 'end': segment['end'], 'text': segment["text"]} for segment in result]
+        progress_notification.message = '步骤 4/4: DeepSeek优化识别内容'
+        print("LLM Processing")
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[
+                {"role": "system", "content": "你是一个字幕检测师,用户提供的字幕是用音频通过asr模型转录的，可能存在谐音，请练习上下文修改为较为合理的语句，要求只修改文字部分，不修改时间,输出严格保持与输入结构相同，不能有多余部分"},
+                {"role": "user", "content": f"{result1}"},
+            ],
+            stream=False
+        )
+        result = response.choices[0].message.content
+        result = result.replace('\n','')
+        # # 4. Create SRT file
+        progress_notification.message = '步骤 5/5: 正在生成SRT文件...'
         print("Creating SRT file...")
         srt_path = output_dir / "subtitle.srt"
+        result = ast.literal_eval(result)
         with open(srt_path, "w", encoding="utf-8") as f:
-            for i, segment in enumerate(result["segments"], 1):
-                start, end, text = segment["start"], segment["end"], segment["text"].strip()
+            for i, segment in enumerate(result):
+                start, end, text = segment['start'], segment["end"], segment["text"].strip()
                 def format_time(t):
                     h, m, s = int(t//3600), int((t%3600)//60), int(t%60)
                     ms = int((t - int(t)) * 1000)

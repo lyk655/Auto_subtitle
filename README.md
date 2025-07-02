@@ -5,3 +5,9 @@
 基本的前端ui的构建  
 待完成工作  
 ...  
+使用方法
+```cmd
+conda create -n subtitle python=3.9 -y
+conda activate subtitle
+pip install -r requirements.txt
+```
