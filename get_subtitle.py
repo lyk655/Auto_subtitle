@@ -7,11 +7,11 @@ from moviepy import VideoFileClip
 import torchaudio.transforms as T
 import numpy as np
 import ast
+from config import *
 import soundfile as sf
 import whisper
 from openai import OpenAI
-client = OpenAI(api_key="sk-aac4578b297c4049bce06f65bced7331", base_url="https://api.deepseek.com")
-# demucs can be slow to import, so it's fine here
+
 from demucs.pretrained import get_model
 from demucs.apply import apply_model
 
@@ -25,6 +25,9 @@ def get_subtitle(video_path: str, progress_notification: ui.notification) -> Pat
     Returns:
         Path to the generated SRT file, or None if failed.
     """
+    conf = load_config()
+    if conf['use_deepseek']:
+        client = OpenAI(api_key=conf['deepseek_api_key'], base_url="https://api.deepseek.com")
     try:
         output_dir = Path("demucs_output")
         output_dir.mkdir(exist_ok=True)
@@ -32,7 +35,7 @@ def get_subtitle(video_path: str, progress_notification: ui.notification) -> Pat
         print(f"Using device: {device}")
 
         # 1. Extract audio using moviepy
-        progress_notification.message = '步骤 1/4: 正在提取音频...'
+        progress_notification.message = '正在提取音频...'
         print("Extracting audio from video...")
         with VideoFileClip(video_path) as video:
             audio = video.audio
@@ -46,12 +49,13 @@ def get_subtitle(video_path: str, progress_notification: ui.notification) -> Pat
         temp_audio_path.unlink() # Clean up temporary audio file
 
         # 2. Separate vocals using Demucs
-        progress_notification.message = '步骤 2/4: 正在分离人声 (这可能需要一些时间)...'
+        progress_notification.message = '正在分离人声 (这可能需要一些时间)...'
         print("Loading Demucs model...")
         model_name = "htdemucs"
+        progress_notification.message = f'{model_name}模型加载中，第一次使用下载需要一定时间'
         model = get_model(model_name).to(device)
         model.eval()
-
+        progress_notification.message = f'加载成功，分离中'
         # Resample if necessary
         if sr != model.samplerate:
             resampler = T.Resample(sr, model.samplerate).to(device)
@@ -83,30 +87,37 @@ def get_subtitle(video_path: str, progress_notification: ui.notification) -> Pat
         sf.write(str(vocals_path), vocals_source.T.numpy(), sr)
 
         # 3. Transcribe with Whisper
-        progress_notification.message = '步骤 3/4: 正在转录文本 (这也可能需要一些时间)...'
+        progress_notification.message = '正在转录文本 (这也可能需要一些时间)...'
         print("Loading Whisper model...")
         # Use a smaller model for faster processing if needed, e.g., "base" or "small"
-        whisper_model = whisper.load_model("medium", device=device)
+        model_nm = conf['model_name']
+        progress_notification.message = f'{model_nm}模型加载中，第一次使用下载需要一定时间'
+        whisper_model = whisper.load_model(model_nm, device=device)
+        progress_notification.message = '加载成功，转录文本中'
         print("Transcribing vocals...")
         result = whisper_model.transcribe(str(vocals_path), language="zh", fp16=torch.cuda.is_available())["segments"]
-        result1 = [{'start': segment['start'], 'end': segment['end'], 'text': segment["text"]} for segment in result]
-        progress_notification.message = '步骤 4/4: DeepSeek优化识别内容'
-        print("LLM Processing")
-        response = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": "你是一个字幕检测师,用户提供的字幕是用音频通过asr模型转录的，可能存在谐音，请练习上下文修改为较为合理的语句，要求只修改文字部分，不修改时间,输出严格保持与输入结构相同，不能有多余部分"},
-                {"role": "user", "content": f"{result1}"},
-            ],
-            stream=False
-        )
-        result = response.choices[0].message.content
-        result = result.replace('\n','')
+        new_result = [{'start': segment['start'], 'end': segment['end'], 'text': segment["text"]} for segment in result]
+        if conf['use_deepseek']:
+            progress_notification.message = 'DeepSeek优化识别内容'
+            print("LLM Processing")
+            response = client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": "你是一个字幕检测师,用户提供的字幕是用音频通过asr模型转录的，可能存在谐音，请练习上下文修改为较为合理的语句，要求只修改文字部分，不修改时间,输出严格保持与输入结构相同，不能有多余部分"},
+                    {"role": "user", "content": f"{new_result}"},
+                ],
+                stream=False
+            )
+            new_result = response.choices[0].message.content
+            new_result = new_result.replace('\n','')
         # # 4. Create SRT file
-        progress_notification.message = '步骤 5/5: 正在生成SRT文件...'
+        progress_notification.message = '正在生成SRT文件...'
         print("Creating SRT file...")
         srt_path = output_dir / "subtitle.srt"
-        result = ast.literal_eval(result)
+        if(type(new_result) == str):
+            result = ast.literal_eval(new_result)
+        else:
+            result = new_result
         with open(srt_path, "w", encoding="utf-8") as f:
             for i, segment in enumerate(result):
                 start, end, text = segment['start'], segment["end"], segment["text"].strip()
@@ -117,6 +128,7 @@ def get_subtitle(video_path: str, progress_notification: ui.notification) -> Pat
                 f.write(f"{i}\n{format_time(start)} --> {format_time(end)}\n{text}\n\n")
         
         print(f"SRT字幕已保存到: {srt_path}")
+        progress_notification.dismiss()
         return srt_path
 
     except Exception as e:
@@ -127,6 +139,4 @@ def get_subtitle(video_path: str, progress_notification: ui.notification) -> Pat
         # Let it show for a while
         time.sleep(5)
         return None
-    finally:
         # Close the persistent notification
-        progress_notification.dismiss()

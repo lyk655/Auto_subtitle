@@ -1,0 +1,5 @@
+{
+    "model_name": "medium",
+    "use_deepseek": false,
+    "deepseek_api_key": ""
+}
