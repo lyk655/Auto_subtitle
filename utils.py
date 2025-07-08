@@ -15,6 +15,7 @@ class Subtitle:
     def end(self): return self.pysrt_item.end.to_time()
     @property
     def text(self): return self.pysrt_item.text
+    
 
 
 @dataclass
@@ -22,6 +23,12 @@ class AppState:
     video_path: Union[Path, None] = None
     subtitles: list[Subtitle] = None
     selected_sub: Union[Subtitle, None] = None
+    preview_prev_time = ''
+    preview_prev_text = ''
+    preview_curr_time = ''
+    preview_curr_text = ''
+    preview_next_time = ''
+    preview_next_text = ''
 
 
 def load_srt_to_subs(srt_path: Path) -> list[Subtitle]:
