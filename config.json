@@ -1,5 +1,7 @@
 {
     "model_name": "medium",
+    "hf_token": "",
+    "hf_cache_dir": "",
     "use_deepseek": false,
-    "deepseek_api_key": ""
+    "deepseek_api_key": null
 }

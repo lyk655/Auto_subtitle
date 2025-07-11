@@ -2,3 +2,8 @@
 *.mp4
 *.srt
 .hypothesis
+__pycache__
+.json
+debug.py
+*.json
+__pycache__/
